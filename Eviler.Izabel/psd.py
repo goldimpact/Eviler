@@ -1,10 +1,13 @@
 import os
 import glob
 import numpy as np
+from tqdm import tqdm
+from functools import wraps
 from PIL import Image
 from pytoshop import PsdFile
 from pytoshop.user import nested_layers
 from pytoshop.enums import ColorMode, BlendMode, ChannelId, ColorDepth, Version
+
 class HierarchyNode:
     def __init__(self, name, kind_index, parent=None):
         self.name = name
@@ -35,23 +38,59 @@ def parse_hierarchy(file_path):
                 parent_info["node"].elements.append(artmesh)
     return root
 
-def build_layer_structure(node, mesh_mapping):
-    layers = []   
+def with_progress_bar(func):
+    @wraps(func)
+    def wrapper(node, mesh_mapping, progress=None):
+        total = count_elements(node)
+        if progress is None:
+            with tqdm(total=total, desc="Building PSD Structure", unit="element") as pbar:
+                return func(node, mesh_mapping, pbar)
+        else:
+            return func(node, mesh_mapping, progress)
+    return wrapper
+
+def count_elements(node):
+    count = 0
     for elem in node.elements:
+        count += 1
+        if isinstance(elem, HierarchyNode):
+            count += count_elements(elem)
+    return count
+
+@with_progress_bar
+def build_layer_structure(node, mesh_mapping, progress=None):
+    layers = []
+    for elem in node.elements:
+        if progress:
+            progress.update(1)
+            progress.set_postfix_str(f"Processing: {get_element_name(elem)}") 
         if isinstance(elem, int):
             if elem in mesh_mapping:
-                layers.append(mesh_mapping[elem])
+                layers.append(create_image_layer(mesh_mapping[elem]))
         else:
-            group = nested_layers.Group(
-                name=elem.name,
-                layers=build_layer_structure(elem, mesh_mapping),
-                visible=True,
-                opacity=255,
-                blend_mode=BlendMode.normal,
-                closed=False
-            )
-            layers.append(group)   
+            ret = build_layer_structure(elem, mesh_mapping, progress)
+            if len(ret) == 0:
+                continue
+            group = create_group(elem, ret)
+            layers.append(group)
     return layers
+
+def get_element_name(elem):
+    if isinstance(elem, int):
+        return f"Mesh#{elem}"
+    elif isinstance(elem, HierarchyNode):
+        return f"Group:{elem.name}"
+    return "Unknown"
+
+def create_group(elem, layers):
+    return nested_layers.Group(
+        name=elem.name,
+        layers=layers,
+        visible=True,
+        opacity=255,
+        blend_mode=BlendMode.normal,
+        closed=False
+    )
 
 def debug_print_hierarchy(node, depth=0):
     indent = '  ' * depth
@@ -119,11 +158,10 @@ def create_image_layer(path):
 def pack_pngs_to_psd(png_dir, hierarchy_file, output_psd):
     sorted_files = get_sorted_png_files(png_dir)
     hierarchy_root = parse_hierarchy(hierarchy_file)
-    # debug_print_hierarchy(hierarchy_root)
+    debug_print_hierarchy(hierarchy_root)
     mesh_mapping = {}
     for mesh_index, path in sorted_files:
-        print(mesh_index, path)
-        mesh_mapping[mesh_index] = create_image_layer(path)
+        mesh_mapping[mesh_index] = path
 
     root_layers = build_layer_structure(hierarchy_root, mesh_mapping) 
     max_width, max_height = 0, 0
@@ -144,7 +182,7 @@ def pack_pngs_to_psd(png_dir, hierarchy_file, output_psd):
 
 if __name__ == "__main__":
     pack_pngs_to_psd(
-        png_dir=r"imgs",
-        hierarchy_file="input.txt",
+        png_dir=r"../imgs",
+        hierarchy_file="../input.txt",
         output_psd="output.psd"
     )
