@@ -17,3 +17,8 @@ Disclaimer:
 **None of the repo, nor the binaries, use any code from commercial softwares by Live2D Inc. or its affiliates.**
 
 This repo is licensed under **CC BY-NC-SA 4.0**.
+
+# My Channel
+bilibili: https://space.bilibili.com/37556366
+
+youtube: https://www.youtube.com/@NickOfficial8106/videos

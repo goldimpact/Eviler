@@ -1,3 +1,4 @@
+import json
 import os
 import glob
 import numpy as np
@@ -38,15 +39,23 @@ def parse_hierarchy(file_path):
                 parent_info["node"].elements.append(artmesh)
     return root
 
+def load_part_names(json_path):
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return {part["Id"]: part["Name"] for part in data.get("Parts", [])}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
 def with_progress_bar(func):
     @wraps(func)
-    def wrapper(node, mesh_mapping, progress=None):
+    def wrapper(node, mesh_mapping, part_names=None, progress=None):
         total = count_elements(node)
         if progress is None:
             with tqdm(total=total, desc="Building PSD Structure", unit="element") as pbar:
-                return func(node, mesh_mapping, pbar)
+                return func(node, mesh_mapping, part_names, pbar)
         else:
-            return func(node, mesh_mapping, progress)
+            return func(node, mesh_mapping, part_names, progress)
     return wrapper
 
 def count_elements(node):
@@ -58,7 +67,7 @@ def count_elements(node):
     return count
 
 @with_progress_bar
-def build_layer_structure(node, mesh_mapping, progress=None):
+def build_layer_structure(node, mesh_mapping, part_names=None, progress=None):
     layers = []
     for elem in node.elements:
         if progress:
@@ -68,10 +77,11 @@ def build_layer_structure(node, mesh_mapping, progress=None):
             if elem in mesh_mapping:
                 layers.append(create_image_layer(mesh_mapping[elem]))
         else:
-            ret = build_layer_structure(elem, mesh_mapping, progress)
+            resolved_name = part_names.get(elem.name, elem.name) if part_names else elem.name
+            ret = build_layer_structure(elem, mesh_mapping, part_names, progress)
             if len(ret) == 0:
                 continue
-            group = create_group(elem, ret)
+            group = create_group(resolved_name, ret)
             layers.append(group)
     return layers
 
@@ -82,24 +92,15 @@ def get_element_name(elem):
         return f"Group:{elem.name}"
     return "Unknown"
 
-def create_group(elem, layers):
+def create_group(name, layers):
     return nested_layers.Group(
-        name=elem.name,
+        name=name,
         layers=layers,
         visible=True,
         opacity=255,
         blend_mode=BlendMode.normal,
         closed=False
     )
-
-def debug_print_hierarchy(node, depth=0):
-    indent = '  ' * depth
-    print(f"{indent}{node.name}, {node.kind_index}")
-    for elem in node.elements:
-        if isinstance(elem, int):
-            print(f"{ '  ' + indent}{elem}")
-        else:
-            debug_print_hierarchy(elem, depth + 1)
 
 def get_sorted_png_files(png_dir):
     files = glob.glob(os.path.join(png_dir, "*_*.png"))
@@ -158,17 +159,17 @@ def create_image_layer(path):
 def pack_pngs_to_psd(png_dir, hierarchy_file, output_psd):
     sorted_files = get_sorted_png_files(png_dir)
     hierarchy_root = parse_hierarchy(hierarchy_file)
-    debug_print_hierarchy(hierarchy_root)
-    mesh_mapping = {}
-    for mesh_index, path in sorted_files:
-        mesh_mapping[mesh_index] = path
-
-    root_layers = build_layer_structure(hierarchy_root, mesh_mapping) 
+    part_names = {}
+    if os.path.basename(hierarchy_file).lower() == "part.txt":
+        cdi_path = os.path.join(os.path.dirname(hierarchy_file), "input.cdi3.json")
+        part_names = load_part_names(cdi_path)
+    mesh_mapping = {mesh: path for mesh, path in sorted_files}
+    root_layers = build_layer_structure(hierarchy_root, mesh_mapping, part_names) 
     max_width, max_height = 0, 0
     for _, path in sorted_files:
         with Image.open(path) as img:
             max_width = max(max_width, img.width)
-            max_height = max(max_height, img.height) 
+            max_height = max(max_height, img.height)
     psd = nested_layers.nested_layers_to_psd(
         layers=root_layers,
         color_mode=ColorMode.rgb,
@@ -181,8 +182,14 @@ def pack_pngs_to_psd(png_dir, hierarchy_file, output_psd):
         psd.write(f)
 
 if __name__ == "__main__":
+    filename = "output"
     pack_pngs_to_psd(
-        png_dir=r"../imgs",
-        hierarchy_file="../input.txt",
-        output_psd="output.psd"
+        png_dir=r"..\imgs",
+        hierarchy_file=r"..\order.txt",
+        output_psd=filename + ".order.psd"
+    )
+    pack_pngs_to_psd(
+        png_dir=r"..\imgs",
+        hierarchy_file=r"..\part.txt",
+        output_psd=filename + ".part.psd"
     )
